@@ -6,6 +6,11 @@ This isn't a habit tracker. The goal isn't "did you do the thing today" — it's
 
 ## [**▶ Live demo**](https://kayleesh.github.io/life-garden/garden.html)
 
+
+<img width="1541" height="781" alt="Screenshot 2026-07-24 at 3 50 24 PM" src="https://github.com/user-attachments/assets/5d6ad32e-2660-47fc-b6ef-a72a9e37247a" />
+
+
+
 ## View it
 
 Click the live demo link above, or open [`garden.html`](garden.html) directly in a browser — no build step, no server needed either way. It's a single self-contained file (Three.js loaded from CDN).
