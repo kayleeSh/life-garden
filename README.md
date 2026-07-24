@@ -4,9 +4,11 @@ An AI-driven growth visualization — four flowers, each representing a life dom
 
 This isn't a habit tracker. The goal isn't "did you do the thing today" — it's showing *why* a domain is thriving or struggling, including effects that aren't obvious from a single metric (e.g. a domain's effort stays constant but it still visibly weakens because sleep quality dropped and dragged the whole garden's "soil" down with it).
 
+## [**▶ Live demo**](https://kayleesh.github.io/life-garden/garden.html)
+
 ## View it
 
-Open [`garden.html`](garden.html) directly in a browser — no build step, no server. It's a single self-contained file (Three.js loaded from CDN).
+Click the live demo link above, or open [`garden.html`](garden.html) directly in a browser — no build step, no server needed either way. It's a single self-contained file (Three.js loaded from CDN).
 
 - Drag the scrubber (bottom-left) to jump to any of the 90 simulated days, or let it autoplay
 - Hover over petals for a lift/glow response
