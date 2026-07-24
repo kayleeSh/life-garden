@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life Garden: AI Growth Visualization</title>
+    <style>
+        :root {
+            /* Spacing scale (4px base grid) — every gap/padding below is one of these. */
+            --space-1: 8px;   /* tight: inside a compact row (legend label/bar/stage) */
+            --space-2: 12px;  /* standard: between elements within one panel */
+            --space-3: 16px;  /* panel padding, and title-to-subtitle rhythm */
+            --space-4: 20px;  /* between distinct panels stacked in the same corner */
+            --space-5: 40px;  /* page margin: distance from viewport edge */
+        }
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            transition: background 2s ease;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #ui-layer {
+            position: relative;
+            z-index: 2;
+            pointer-events: none;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: var(--space-5);
+            box-sizing: border-box;
+        }
+        .header { text-align: left; }
+        h1 {
+            margin: 0 0 var(--space-2) 0;
+            font-weight: 300;
+            letter-spacing: 2px;
+            font-size: 1.8rem;
+            text-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        }
+        .subtitle { font-size: 0.9rem; opacity: 0.8; letter-spacing: 1px; }
+
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 0.85rem;
+        }
+        button:hover, button.active {
+            background: rgba(255, 182, 193, 0.6);
+            box-shadow: 0 0 12px rgba(255, 182, 193, 0.5);
+        }
+
+        .playback {
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+            background: rgba(0, 0, 0, 0.4);
+            padding: var(--space-3);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            width: fit-content;
+            min-width: 340px;
+        }
+        .playback button { flex-shrink: 0; min-width: 40px; }
+        #day-label { font-size: 0.8rem; opacity: 0.85; white-space: nowrap; min-width: 80px; }
+        input[type=range] { flex: 1; accent-color: #ffb6c1; cursor: pointer; }
+
+        #legend {
+            position: absolute;
+            top: var(--space-5);
+            right: var(--space-5);
+            z-index: 2;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.35);
+            padding: var(--space-3);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            font-size: 0.8rem;
+            min-width: 200px;
+        }
+        .legend-row { display: flex; align-items: center; gap: var(--space-1); margin-bottom: var(--space-2); }
+        .legend-row:last-child { margin-bottom: 0; }
+        .legend-name { flex: 0 0 84px; }
+        .legend-stage { flex: 0 0 54px; opacity: 0.75; font-size: 0.7rem; text-transform: capitalize; }
+        .legend-bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.15); overflow: hidden; }
+        .legend-fill { height: 100%; background: linear-gradient(90deg, #ffb6c1, #ff6f91); }
+
+        #status-indicator {
+            position: absolute;
+            bottom: var(--space-5);
+            right: var(--space-5);
+            text-align: right;
+            font-size: 0.85rem;
+            opacity: 0.9;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+        #insight-caption { font-size: 0.95rem; max-width: 360px; margin-top: var(--space-1); }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <div class="header">
+            <h1>Life Garden</h1>
+            <div class="subtitle">AI-Driven Growth Visualization · 90-Day Simulated Journey</div>
+        </div>
+
+        <div class="playback">
+            <button id="play-pause-btn">⏸</button>
+            <input type="range" id="day-scrubber" min="0" max="89" value="0">
+            <span id="day-label">Day 1 / 90</span>
+        </div>
+    </div>
+
+    <div id="legend"></div>
+
+    <div id="status-indicator">
+        <div id="time-display">Day 1 / 90</div>
+        <div id="insight-caption">Loading garden...</div>
+    </div>
+
+    <script>
+        'use strict';
+
+        // =====================================================================
+        // Growth engine — inlined copy of ~/life-garden/lib/growthEngine.js
+        // Keep manually in sync with that file if the model changes.
+        // =====================================================================
+        const STAGE_ORDER = ['seed', 'sprout', 'leaf', 'bud', 'bloom', 'fruit'];
+        const STAGE_BOUNDARIES = [
+            { up: 0.20, down: 0.12 },
+            { up: 0.40, down: 0.30 },
+            { up: 0.60, down: 0.50 },
+            { up: 0.80, down: 0.70 },
+        ];
+        const FRUIT_MIN_VITALITY = 0.92;
+        const FRUIT_MIN_DWELL_DAYS = 14;
+        const FRUIT_EXIT_VITALITY = 0.85;
+        const WILT_MOMENTUM_THRESHOLD = -0.01;
+        const WILT_STREAK_DAYS = 5;
+        const BASELINE_DECAY = 0.97;
+
+        function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+        function normalizeAgainstBaseline(value, baseline, ceilingMultiplier = 1.2) {
+            if (!baseline || baseline <= 0) return value > 0 ? 0.5 : 0;
+            return clamp(value / (baseline * ceilingMultiplier), 0, 1);
+        }
+
+        function sleepScorer(raw) {
+            const idealMin = 7, idealMax = 9;
+            let durationScore;
+            if (raw.durationHours >= idealMin && raw.durationHours <= idealMax) {
+                durationScore = 1;
+            } else {
+                const dist = raw.durationHours < idealMin ? idealMin - raw.durationHours : raw.durationHours - idealMax;
+                durationScore = clamp(1 - dist / 3, 0, 1);
+            }
+            const deepScore = clamp(raw.deepSleepPct / 0.22, 0, 1);
+            return clamp(durationScore * 0.7 + deepScore * 0.3, 0, 1);
+        }
+
+        function fitnessScorer(raw, baseline) {
+            const stepsScore = normalizeAgainstBaseline(raw.steps, baseline.steps);
+            const activeScore = normalizeAgainstBaseline(raw.activeMinutes, baseline.activeMinutes);
+            const workoutBonus = raw.workouts > 0 ? 0.15 : 0;
+            return clamp(stepsScore * 0.55 + activeScore * 0.3 + workoutBonus, 0, 1);
+        }
+
+        function studyScorer(raw, baseline) {
+            const minutesScore = normalizeAgainstBaseline(raw.minutes, baseline.minutes);
+            const spreadBonus = raw.sessions > 0 ? clamp(raw.sessions / 2, 0, 1) : 0;
+            return clamp(minutesScore * 0.75 + spreadBonus * 0.25, 0, 1);
+        }
+
+        const CAREER_EVENT_WEIGHTS = { commit: 0.1, publish: 0.4, interview: 0.6, offer: 1.0, shipped_project: 0.7 };
+        function careerScorer(raw) {
+            if (!raw.events || raw.events.length === 0) return 0;
+            const total = raw.events.reduce((sum, e) => sum + (CAREER_EVENT_WEIGHTS[e.type] ?? 0.2) * (e.weight ?? 1), 0);
+            return clamp(total, 0, 1);
+        }
+
+        const DOMAINS = [
+            { id: 'sleep', decay: 0.75, mode: 'flow', isFoundation: true, scorer: sleepScorer, baselineKeys: [] },
+            { id: 'fitness', decay: 0.85, mode: 'flow', isFoundation: false, scorer: fitnessScorer, baselineKeys: ['steps', 'activeMinutes'] },
+            { id: 'study', decay: 0.88, mode: 'flow', isFoundation: false, scorer: studyScorer, baselineKeys: ['minutes'] },
+            { id: 'career', decay: 0.97, mode: 'impulse', isFoundation: false, scorer: careerScorer, baselineKeys: [] },
+        ];
+
+        function initDomainState() {
+            return { vitality: 0.2, momentum: 0, stage: 'seed', stageEnteredOn: null, stageDwellDays: 0, declineStreak: 0, wilting: false, baseline: {} };
+        }
+        function initGardenState() {
+            const domains = {};
+            for (const d of DOMAINS) domains[d.id] = initDomainState();
+            return { domains, soilMoisture: 1 };
+        }
+        function computeSoilMoisture(domainStates) {
+            const foundations = DOMAINS.filter((d) => d.isFoundation);
+            if (foundations.length === 0) return 1;
+            const sum = foundations.reduce((acc, d) => acc + (domainStates[d.id]?.vitality ?? 1), 0);
+            return sum / foundations.length;
+        }
+        function updateBaseline(state, domainConfig, raw) {
+            const baseline = { ...state.baseline };
+            for (const key of domainConfig.baselineKeys) {
+                const prev = baseline[key];
+                baseline[key] = prev === undefined ? raw[key] : prev * BASELINE_DECAY + raw[key] * (1 - BASELINE_DECAY);
+            }
+            return baseline;
+        }
+        function computeStage(prevState, vitality, date) {
+            if (prevState.stage === 'fruit') {
+                if (vitality < FRUIT_EXIT_VITALITY) return { stage: 'bloom', stageEnteredOn: date, stageDwellDays: 0 };
+                return { stage: 'fruit', stageEnteredOn: prevState.stageEnteredOn, stageDwellDays: (prevState.stageDwellDays ?? 0) + 1 };
+            }
+            let idx = STAGE_ORDER.indexOf(prevState.stage);
+            let changed = false;
+            while (idx < STAGE_BOUNDARIES.length && vitality >= STAGE_BOUNDARIES[idx].up) { idx += 1; changed = true; }
+            while (idx > 0 && vitality < STAGE_BOUNDARIES[idx - 1].down) { idx -= 1; changed = true; }
+            const dwellDays = changed ? 0 : (prevState.stageDwellDays ?? 0) + 1;
+            const stage = STAGE_ORDER[idx];
+            if (stage === 'bloom' && vitality >= FRUIT_MIN_VITALITY && dwellDays >= FRUIT_MIN_DWELL_DAYS) {
+                return { stage: 'fruit', stageEnteredOn: date, stageDwellDays: 0 };
+            }
+            return { stage, stageEnteredOn: changed ? date : prevState.stageEnteredOn, stageDwellDays: dwellDays };
+        }
+        function stepDomain(domainConfig, state, raw, soilMoisture, date) {
+            const baseline = updateBaseline(state, domainConfig, raw);
+            const rawScore = domainConfig.scorer(raw, baseline);
+            const soilFactor = domainConfig.isFoundation ? 1 : (0.5 + 0.5 * soilMoisture);
+            const effectiveScore = rawScore * soilFactor;
+            const prevVitality = state.vitality;
+            const vitality = domainConfig.mode === 'impulse'
+                ? clamp(prevVitality * domainConfig.decay + effectiveScore, 0, 1)
+                : prevVitality * domainConfig.decay + effectiveScore * (1 - domainConfig.decay);
+            const momentum = vitality - prevVitality;
+            const declineStreak = domainConfig.mode === 'flow' && momentum < WILT_MOMENTUM_THRESHOLD ? (state.declineStreak ?? 0) + 1 : 0;
+            const wilting = domainConfig.mode === 'flow' && declineStreak >= WILT_STREAK_DAYS;
+            const { stage, stageEnteredOn, stageDwellDays } = computeStage(state, vitality, date);
+            return { vitality, momentum, stage, stageEnteredOn, stageDwellDays, declineStreak, wilting, baseline, rawScore, effectiveScore };
+        }
+        function stepGarden(gardenState, dailyRawSignals) {
+            const { date } = dailyRawSignals;
+            const soilMoisture = computeSoilMoisture(gardenState.domains);
+            const domains = {};
+            for (const domainConfig of DOMAINS) {
+                const prev = gardenState.domains[domainConfig.id] ?? initDomainState();
+                const raw = dailyRawSignals[domainConfig.id];
+                domains[domainConfig.id] = stepDomain(domainConfig, prev, raw, soilMoisture, date);
+            }
+            return { domains, soilMoisture };
+        }
+
+        // =====================================================================
+        // Synthetic history — inlined copy of ~/life-garden/lib/syntheticHistory.js
+        // =====================================================================
+        function mulberry32(seed) {
+            return function () {
+                seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+                let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        }
+        function randRange(rng, min, max) { return min + rng() * (max - min); }
+        const LEVELS = {
+            sleep: { good: { durationHours: [7.2, 8.5], deepSleepPct: [0.18, 0.24] }, poor: { durationHours: [4.8, 6.0], deepSleepPct: [0.07, 0.12] } },
+            fitness: { good: { steps: [8500, 11500], activeMinutes: [40, 65], workoutChance: 0.5 }, poor: { steps: [1500, 3500], activeMinutes: [0, 12], workoutChance: 0.05 } },
+            study: { good: { minutes: [80, 150], sessions: [2, 3] }, poor: { minutes: [0, 20], sessions: [0, 1] } },
+        };
+        function pick(range, rng) { return randRange(rng, range[0], range[1]); }
+        function generateDay(date, phaseLevels, rng) {
+            const sleepRange = LEVELS.sleep[phaseLevels.sleep];
+            const fitnessRange = LEVELS.fitness[phaseLevels.fitness];
+            const studyRange = LEVELS.study[phaseLevels.study];
+            return {
+                date,
+                sleep: { durationHours: pick(sleepRange.durationHours, rng), deepSleepPct: pick(sleepRange.deepSleepPct, rng) },
+                fitness: { steps: Math.round(pick(fitnessRange.steps, rng)), activeMinutes: pick(fitnessRange.activeMinutes, rng), workouts: rng() < fitnessRange.workoutChance ? 1 : 0 },
+                study: { minutes: pick(studyRange.minutes, rng), sessions: Math.round(pick(studyRange.sessions, rng)) },
+                career: { events: [] },
+            };
+        }
+        function addDays(base, n) { const d = new Date(base); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+        function generateSyntheticHistory({ days = 90, phases, careerEvents = [], startDate = '2026-01-01', seed = 42 } = {}) {
+            const rng = mulberry32(seed);
+            const resolvedPhases = phases ?? [{ len: days, levels: { sleep: 'good', fitness: 'good', study: 'good' } }];
+            const history = [];
+            let dayIndex = 0;
+            for (const phase of resolvedPhases) {
+                for (let i = 0; i < phase.len && dayIndex < days; i += 1, dayIndex += 1) {
+                    const date = addDays(startDate, dayIndex);
+                    const day = generateDay(date, phase.levels, rng);
+                    const events = careerEvents.filter((e) => e.dayIndex === dayIndex);
+                    if (events.length) day.career.events = events.map((e) => ({ type: e.type, weight: e.weight }));
+                    history.push(day);
+                }
+            }
+            return history;
+        }
+
+        // =====================================================================
+        // Precompute the 90-day trajectory once — the scene only ever reads
+        // trajectory[dayIndex] by index, never re-runs the simulation live.
+        // =====================================================================
+        const history = generateSyntheticHistory({
+            days: 90,
+            startDate: '2026-01-01',
+            phases: [
+                { len: 30, levels: { sleep: 'good', fitness: 'good', study: 'good' } },
+                { len: 21, levels: { sleep: 'poor', fitness: 'good', study: 'good' } },
+                { len: 39, levels: { sleep: 'good', fitness: 'good', study: 'good' } },
+            ],
+            careerEvents: [
+                { dayIndex: 10, type: 'shipped_project' },
+                { dayIndex: 45, type: 'publish' },
+                { dayIndex: 80, type: 'offer' },
+            ],
+        });
+        const trajectory = [];
+        {
+            let garden = initGardenState();
+            for (const day of history) {
+                garden = stepGarden(garden, day);
+                trajectory.push(garden);
+            }
+        }
+        const TOTAL_DAYS = trajectory.length;
+
+        // =====================================================================
+        // Three.js scene setup
+        // =====================================================================
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 7, 15);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.physicallyCorrectLights = true;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.15;
+        controls.target.set(0, -0.6, 0);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const mainLight = new THREE.DirectionalLight(0xffffff, 3);
+        mainLight.position.set(6, 9, 6);
+        scene.add(mainLight);
+        const rimLight = new THREE.DirectionalLight(0xffb6c1, 3);
+        rimLight.position.set(-6, 4, -6);
+        scene.add(rimLight);
+
+        // Soft glow that follows the cursor across the garden — fades in
+        // when the pointer is over a flower, fades out otherwise.
+        const cursorLight = new THREE.PointLight(0xffe3f0, 0, 2.5);
+        scene.add(cursorLight);
+
+        // Fixed night palette — soil moisture still modulates brightness
+        // (see soilLightFactor in the render loop), it just no longer swaps
+        // between different times-of-day.
+        const nightPreset = { bg: 'radial-gradient(circle at center, #1a1a2e, #05050a)', ambient: 0x483d8b, main: 0x87cefa, mainInt: 1.8, rim: 0x4169e1, rimInt: 3 };
+        const targetLights = {
+            ambient: new THREE.Color(nightPreset.ambient),
+            main: new THREE.Color(nightPreset.main),
+            rim: new THREE.Color(nightPreset.rim),
+        };
+        const targetMainInt = nightPreset.mainInt, targetRimInt = nightPreset.rimInt;
+        document.body.style.background = nightPreset.bg;
+
+        // =====================================================================
+        // Flower factory — same procedural petal math for every domain,
+        // just different config constants (no per-species geometry pipeline).
+        // =====================================================================
+        const STAGE_SCALE = { seed: 0.18, sprout: 0.35, leaf: 0.58, bud: 0.8, bloom: 1.0, fruit: 1.05 };
+
+        // Tapers a petal's flat rectangular outline into a natural silhouette:
+        // narrow at the base (attachment point), widening smoothly, then a
+        // rounded (not flat-cut or pointed) tip — this is what actually removes
+        // the jagged/star-burst look, independent of the surface cup/bow/ruffle.
+        function petalWidthProfile(edgeFactor) {
+            const shaftEnd = 0.72;
+            const baseNarrow = 0.32;
+            if (edgeFactor < shaftEnd) {
+                const local = edgeFactor / shaftEnd;
+                return baseNarrow + (1 - baseNarrow) * Math.sin(local * Math.PI / 2);
+            }
+            const local = (edgeFactor - shaftEnd) / (1 - shaftEnd);
+            return Math.sqrt(Math.max(0, 1 - local * local));
+        }
+
+        function buildPetalGeometry(config) {
+            const petalGeo = new THREE.PlaneGeometry(config.petalWidth, config.petalLength, 24, 24);
+            const posAttr = petalGeo.attributes.position;
+            const v3 = new THREE.Vector3();
+            const halfWidth = config.petalWidth / 2;
+            const halfLength = config.petalLength / 2;
+            for (let i = 0; i < posAttr.count; i++) {
+                v3.fromBufferAttribute(posAttr, i);
+                const xNorm = v3.x / halfWidth;
+                const edgeFactor = Math.max(0, (v3.y + halfLength) / config.petalLength);
+                const cup = Math.pow(xNorm, 2) * config.cupAmount;
+                const bow = Math.sin(edgeFactor * 1.125 * Math.PI) * config.bowAmount;
+                const ruffle = Math.sin(xNorm * 10) * Math.cos(edgeFactor * 7) * config.ruffle * edgeFactor;
+                const taperedX = v3.x * petalWidthProfile(edgeFactor);
+                posAttr.setXYZ(i, taperedX, v3.y, cup + bow + ruffle);
+            }
+            petalGeo.computeVertexNormals();
+            petalGeo.translate(0, halfLength, 0);
+            return petalGeo;
+        }
+
+        function buildLeafGeometry(width, length) {
+            const geo = new THREE.PlaneGeometry(width, length, 12, 12);
+            const posAttr = geo.attributes.position;
+            const v3 = new THREE.Vector3();
+            const halfWidth = width / 2;
+            const halfLength = length / 2;
+            for (let i = 0; i < posAttr.count; i++) {
+                v3.fromBufferAttribute(posAttr, i);
+                const xNorm = v3.x / halfWidth;
+                const edgeFactor = Math.max(0, (v3.y + halfLength) / length);
+                const centerRidge = (1 - Math.pow(xNorm, 2)) * 0.05;
+                const taperedX = v3.x * petalWidthProfile(edgeFactor);
+                posAttr.setXYZ(i, taperedX, v3.y, centerRidge);
+            }
+            geo.computeVertexNormals();
+            geo.translate(0, halfLength, 0);
+            return geo;
+        }
+
+        function createFlower(config) {
+            const group = new THREE.Group();
+            const petalGeo = buildPetalGeometry(config);
+            const petals = [];
+            const layerMaterials = [];
+
+            for (let l = 0; l < config.numLayers; l++) {
+                const layerRatio = l / (config.numLayers - 1);
+                const baseColor = new THREE.Color().lerpColors(config.innerColor, config.outerColor, layerRatio);
+                const material = new THREE.MeshPhysicalMaterial({
+                    color: baseColor.clone(),
+                    emissive: config.emissive,
+                    roughness: 0.45,
+                    metalness: 0.05,
+                    clearcoat: 0.4,
+                    clearcoatRoughness: 0.2,
+                    transmission: 0.65 - layerRatio * 0.25,
+                    thickness: 0.4 + layerRatio * 0.2,
+                    side: THREE.DoubleSide,
+                });
+                material.userData.baseColor = baseColor.clone();
+                material.userData.targetGlow = 0;
+                material.userData.currentGlow = 0;
+                layerMaterials.push(material);
+
+                const petalsInLayer = Math.max(3, Math.round(config.petalsBase + l * config.petalsSlope));
+                const scale = config.scaleBase + l * config.scaleSlope;
+                const fullTilt = config.bloomTiltMax * Math.pow(layerRatio, 0.8) + config.bloomTiltMin;
+
+                for (let p = 0; p < petalsInLayer; p++) {
+                    const angle = (p / petalsInLayer) * Math.PI * 2 + l * config.layerTwist;
+                    const randScale = scale * (0.85 + Math.random() * 0.3);
+                    const randAngle = angle + (Math.random() * 0.2 - 0.1);
+
+                    const mesh = new THREE.Mesh(petalGeo, material);
+                    mesh.scale.set(randScale, randScale, randScale);
+
+                    const pivot = new THREE.Group();
+                    pivot.rotation.y = randAngle;
+                    const radius = l * config.pivotSpread;
+                    pivot.position.set(Math.cos(randAngle) * radius, 0, Math.sin(randAngle) * radius);
+
+                    mesh.userData = { fullTilt, targetOffset: 0, currentOffset: 0 };
+                    pivot.add(mesh);
+                    group.add(pivot);
+                    petals.push(mesh);
+                }
+            }
+
+            const stamenGroup = new THREE.Group();
+            const stamenGeo = new THREE.CylinderGeometry(0.01, 0.01, config.stamenLength, 4);
+            stamenGeo.translate(0, config.stamenLength / 2, 0);
+            const stamenMat = new THREE.MeshStandardMaterial({ color: config.stamenColor, emissive: config.stamenColor, emissiveIntensity: 0.8 });
+            for (let i = 0; i < config.stamenCount; i++) {
+                const stamen = new THREE.Mesh(stamenGeo, stamenMat);
+                const r = Math.random() * config.stamenSpread;
+                const theta = Math.random() * Math.PI * 2;
+                stamen.position.set(Math.cos(theta) * r, 0, Math.sin(theta) * r);
+                stamen.rotation.x = (Math.random() - 0.5) * 0.6;
+                stamen.rotation.z = (Math.random() - 0.5) * 0.6;
+                stamenGroup.add(stamen);
+            }
+            group.add(stamenGroup);
+
+            const fruitGeo = new THREE.SphereGeometry(0.22, 16, 16);
+            const fruitMat = new THREE.MeshStandardMaterial({ color: config.fruitColor, emissive: config.fruitColor, emissiveIntensity: 1.2 });
+            const fruitMesh = new THREE.Mesh(fruitGeo, fruitMat);
+            fruitMesh.position.set(0, 0.15, 0);
+            fruitMesh.visible = false;
+            group.add(fruitMesh);
+
+            const coreLight = new THREE.PointLight(config.coreLightColor, config.coreIntensityBase, 4);
+            coreLight.position.set(0, 0.5, 0);
+            group.add(coreLight);
+
+            // Stem: tapered cylinder hanging below the bloom (thin near the
+            // flower, thicker toward the root), plus a handful of leaves
+            // that pivot outward partway up — same pivot+tilt pattern as
+            // the petals so the outward lean is correct per compass angle.
+            const stemGroup = new THREE.Group();
+            const stemGeo = new THREE.CylinderGeometry(0.035, 0.07, config.stemLength, 8);
+            stemGeo.translate(0, -config.stemLength / 2, 0);
+            const stemMat = new THREE.MeshStandardMaterial({ color: config.stemColor, roughness: 0.75, metalness: 0.05 });
+            stemGroup.add(new THREE.Mesh(stemGeo, stemMat));
+
+            const leafGeo = buildLeafGeometry(config.leafWidth, config.leafLength);
+            const leafMat = new THREE.MeshStandardMaterial({ color: config.leafColor, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide });
+            leafMat.userData.baseColor = new THREE.Color(config.leafColor);
+            const leaves = [];
+            for (let i = 0; i < config.leafCount; i++) {
+                const t = (i + 1) / (config.leafCount + 1);
+                const heightY = -config.stemLength * (0.22 + t * 0.55);
+                const angle = (i / config.leafCount) * Math.PI * 2 + (i % 2) * (Math.PI / config.leafCount);
+                const pivot = new THREE.Group();
+                pivot.position.set(0, heightY, 0);
+                pivot.rotation.y = angle;
+                const leaf = new THREE.Mesh(leafGeo, leafMat);
+                const baseTilt = 1.0 + Math.random() * 0.25;
+                leaf.userData = { baseTilt };
+                leaf.rotation.x = baseTilt;
+                leaf.rotation.z = (Math.random() - 0.5) * 0.15;
+                pivot.add(leaf);
+                stemGroup.add(pivot);
+                leaves.push(leaf);
+            }
+            group.add(stemGroup);
+
+            const state = {
+                initialized: false,
+                targetBloomFactor: 0.3, currentBloomFactor: 0.3,
+                targetGroupScale: 0.5, currentGroupScale: 0.5,
+                targetWiltAmount: 0, currentWiltAmount: 0,
+                targetCoreIntensity: config.coreIntensityBase, currentCoreIntensity: config.coreIntensityBase,
+            };
+
+            function applyGrowth(domainState) {
+                const vitality = domainState.vitality;
+                state.targetBloomFactor = 0.06 + 0.94 * vitality;
+                state.targetGroupScale = STAGE_SCALE[domainState.stage] ?? 1;
+                state.targetWiltAmount = domainState.wilting ? 1 : 0;
+                state.targetCoreIntensity = config.coreIntensityBase * (0.4 + 0.6 * vitality);
+                stamenGroup.visible = vitality > 0.18;
+                fruitMesh.visible = domainState.stage === 'fruit';
+
+                if (!state.initialized) {
+                    state.currentBloomFactor = state.targetBloomFactor;
+                    state.currentGroupScale = state.targetGroupScale;
+                    state.currentWiltAmount = state.targetWiltAmount;
+                    state.currentCoreIntensity = state.targetCoreIntensity;
+                    state.initialized = true;
+                }
+            }
+
+            function tick(delta, time, flowerIndex) {
+                const rate = 1 - Math.exp(-2.2 * delta);
+                state.currentBloomFactor = THREE.MathUtils.lerp(state.currentBloomFactor, state.targetBloomFactor, rate);
+                state.currentGroupScale = THREE.MathUtils.lerp(state.currentGroupScale, state.targetGroupScale, rate);
+                state.currentWiltAmount = THREE.MathUtils.lerp(state.currentWiltAmount, state.targetWiltAmount, rate);
+                state.currentCoreIntensity = THREE.MathUtils.lerp(state.currentCoreIntensity, state.targetCoreIntensity, rate);
+
+                group.scale.setScalar(state.currentGroupScale);
+                coreLight.intensity = state.currentCoreIntensity;
+
+                layerMaterials.forEach((mat) => {
+                    if (state.currentWiltAmount > 0.001) {
+                        mat.color.copy(mat.userData.baseColor).lerp(config.wiltColor, state.currentWiltAmount);
+                    } else {
+                        mat.color.copy(mat.userData.baseColor);
+                    }
+                    mat.userData.currentGlow = THREE.MathUtils.lerp(mat.userData.currentGlow, mat.userData.targetGlow, delta * 6);
+                    mat.emissiveIntensity = (0.35 + 0.9 * state.currentBloomFactor) * (1 - state.currentWiltAmount * 0.6) + mat.userData.currentGlow * 0.55;
+                });
+
+                const droop = state.currentWiltAmount * 0.3;
+                petals.forEach((mesh, i) => {
+                    const wind = Math.sin(time * 1.4 + (flowerIndex * 37 + i) * 0.11) * 0.012;
+                    mesh.userData.currentOffset = THREE.MathUtils.lerp(mesh.userData.currentOffset, mesh.userData.targetOffset, delta * 8);
+                    mesh.rotation.x = mesh.userData.fullTilt * state.currentBloomFactor + wind + mesh.userData.currentOffset + droop;
+                });
+
+                if (state.currentWiltAmount > 0.001) {
+                    leafMat.color.copy(leafMat.userData.baseColor).lerp(config.wiltColor, state.currentWiltAmount);
+                } else {
+                    leafMat.color.copy(leafMat.userData.baseColor);
+                }
+                leaves.forEach((leaf, i) => {
+                    const sway = Math.sin(time * 1.1 + (flowerIndex * 19 + i) * 0.2) * 0.02;
+                    leaf.rotation.x = leaf.userData.baseTilt + sway + droop * 1.2;
+                });
+            }
+
+            return { group, petals, applyGrowth, tick };
+        }
+
+        // =====================================================================
+        // Domain flower configs — same math, different constants per "species"
+        // =====================================================================
+        const FLOWER_CONFIGS = [
+            {
+                id: 'career', label: 'Career', emoji: '🌸',
+                petalWidth: 1, petalLength: 2.6, cupAmount: 0.22, bowAmount: 0.55, ruffle: 0.045,
+                numLayers: 12, petalsBase: 5, petalsSlope: 3.5, layerTwist: 1.3, pivotSpread: 0.06,
+                scaleBase: 0.35, scaleSlope: 0.06, bloomTiltMax: Math.PI / 2.3, bloomTiltMin: 0.15,
+                innerColor: new THREE.Color(0xc91c55), outerColor: new THREE.Color(0xfac8d8), emissive: 0x330015,
+                stamenColor: 0xffd700, stamenCount: 70, stamenLength: 0.55, stamenSpread: 0.32,
+                coreLightColor: 0xffd700, coreIntensityBase: 2, fruitColor: 0xff2d55,
+                wiltColor: new THREE.Color(0x5a4030),
+                stemLength: 1.8, stemColor: 0x3d5a2e, leafColor: 0x4c7a3a, leafCount: 3, leafWidth: 0.5, leafLength: 1.1,
+            },
+            {
+                id: 'study', label: 'Study', emoji: '🌻',
+                petalWidth: 1.35, petalLength: 2.9, cupAmount: 0.06, bowAmount: 0.18, ruffle: 0.012,
+                numLayers: 7, petalsBase: 9, petalsSlope: 1.8, layerTwist: 0.85, pivotSpread: 0.05,
+                scaleBase: 0.5, scaleSlope: 0.09, bloomTiltMax: Math.PI / 2.02, bloomTiltMin: 0.06,
+                innerColor: new THREE.Color(0x1c4e80), outerColor: new THREE.Color(0x8ecae6), emissive: 0x0a1f33,
+                stamenColor: 0xffd76e, stamenCount: 170, stamenLength: 0.12, stamenSpread: 0.4,
+                coreLightColor: 0xffcf5c, coreIntensityBase: 1.6, fruitColor: 0xbde0fe,
+                wiltColor: new THREE.Color(0x554429),
+                stemLength: 2.2, stemColor: 0x3f6b2e, leafColor: 0x4f8a3a, leafCount: 4, leafWidth: 0.6, leafLength: 1.3,
+            },
+            {
+                id: 'fitness', label: 'Fitness', emoji: '🌷',
+                petalWidth: 0.85, petalLength: 2.0, cupAmount: 0.5, bowAmount: 0.35, ruffle: 0.018,
+                numLayers: 5, petalsBase: 6, petalsSlope: 0.4, layerTwist: 1.5, pivotSpread: 0.045,
+                scaleBase: 0.55, scaleSlope: 0.14, bloomTiltMax: Math.PI / 2.6, bloomTiltMin: 0.22,
+                innerColor: new THREE.Color(0xffd23f), outerColor: new THREE.Color(0xe8590c), emissive: 0x3a1e00,
+                stamenColor: 0x7a4a00, stamenCount: 24, stamenLength: 0.4, stamenSpread: 0.22,
+                coreLightColor: 0xffb703, coreIntensityBase: 1.6, fruitColor: 0xffe066,
+                wiltColor: new THREE.Color(0x4a3222),
+                stemLength: 1.4, stemColor: 0x3a6b3a, leafColor: 0x4a8a4a, leafCount: 2, leafWidth: 0.45, leafLength: 1.0,
+            },
+            {
+                id: 'sleep', label: 'Sleep', emoji: '🪷',
+                petalWidth: 1.15, petalLength: 2.4, cupAmount: 0.16, bowAmount: 0.4, ruffle: 0.014,
+                numLayers: 9, petalsBase: 6, petalsSlope: 2.0, layerTwist: 1.0, pivotSpread: 0.055,
+                scaleBase: 0.45, scaleSlope: 0.115, bloomTiltMax: Math.PI / 2.15, bloomTiltMin: 0.1,
+                innerColor: new THREE.Color(0x5b3a8a), outerColor: new THREE.Color(0x6fa8dc), emissive: 0x1a1233,
+                stamenColor: 0xffe9a8, stamenCount: 55, stamenLength: 0.32, stamenSpread: 0.3,
+                coreLightColor: 0xb98cff, coreIntensityBase: 1.6, fruitColor: 0xb8c6ff,
+                wiltColor: new THREE.Color(0x4a4438),
+                stemLength: 1.9, stemColor: 0x35604a, leafColor: 0x3f7a5a, leafCount: 3, leafWidth: 0.55, leafLength: 1.15,
+            },
+        ];
+
+        const GARDEN_RADIUS = 4.6;
+        const flowers = FLOWER_CONFIGS.map((cfg, i) => {
+            const instance = createFlower(cfg);
+            const angle = (i / FLOWER_CONFIGS.length) * Math.PI * 2;
+            instance.group.position.set(Math.cos(angle) * GARDEN_RADIUS, -1, Math.sin(angle) * GARDEN_RADIUS);
+            scene.add(instance.group);
+            return { id: cfg.id, label: cfg.label, emoji: cfg.emoji, index: i, instance };
+        });
+        const allPetals = flowers.flatMap((f) => f.instance.petals);
+
+        // Legend rows, generated from FLOWER_CONFIGS so it can't drift out of sync
+        const legendEl = document.getElementById('legend');
+        flowers.forEach((f) => {
+            const row = document.createElement('div');
+            row.className = 'legend-row';
+            row.innerHTML = `
+                <span class="legend-name">${f.emoji} ${f.label}</span>
+                <span class="legend-bar"><span class="legend-fill" id="legend-fill-${f.id}"></span></span>
+                <span class="legend-stage" id="legend-stage-${f.id}"></span>
+            `;
+            legendEl.appendChild(row);
+        });
+
+        function updateLegend(snapshot) {
+            flowers.forEach((f) => {
+                const d = snapshot.domains[f.id];
+                document.getElementById(`legend-fill-${f.id}`).style.width = `${Math.round(d.vitality * 100)}%`;
+                document.getElementById(`legend-stage-${f.id}`).textContent = d.wilting ? 'wilting' : d.stage;
+            });
+        }
+
+        const DOMAIN_LABELS = { sleep: 'Sleep 🪷', fitness: 'Fitness 🌷', study: 'Study 🌻', career: 'Career 🌸' };
+        function updateCaption(dayIndex, snapshot) {
+            const prev = dayIndex > 0 ? trajectory[dayIndex - 1] : null;
+            let message = null;
+
+            for (const id of ['career', 'study', 'fitness', 'sleep']) {
+                const d = snapshot.domains[id];
+                const wasFruit = prev && prev.domains[id].stage === 'fruit';
+                if (d.stage === 'fruit' && !wasFruit) {
+                    message = `${DOMAIN_LABELS[id]} has been thriving long enough to bear fruit.`;
+                    break;
+                }
+            }
+
+            if (!message && snapshot.soilMoisture < 0.6) {
+                const dragging = ['fitness', 'study', 'career'].find((id) => snapshot.domains[id].momentum < -0.002);
+                if (dragging) {
+                    message = `${DOMAIN_LABELS[dragging]} effort hasn't changed, but soil is dry — sleep has been declining.`;
+                }
+            }
+
+            if (!message) {
+                const wiltingId = ['fitness', 'study'].find((id) => snapshot.domains[id].wilting);
+                if (wiltingId) message = `${DOMAIN_LABELS[wiltingId]} hasn't had attention in a while — it's starting to wilt.`;
+            }
+
+            if (!message) {
+                let best = 'sleep';
+                for (const id of Object.keys(snapshot.domains)) {
+                    if (snapshot.domains[id].momentum > snapshot.domains[best].momentum) best = id;
+                }
+                message = `${DOMAIN_LABELS[best]} is growing steadily.`;
+            }
+
+            document.getElementById('insight-caption').textContent = message;
+        }
+
+        // =====================================================================
+        // Timeline driver
+        // =====================================================================
+        let currentDay = 0;
+        let playing = true;
+        let dayAccumulator = 0;
+        const DAY_DURATION = 1.0;
+
+        const scrubber = document.getElementById('day-scrubber');
+        scrubber.max = String(TOTAL_DAYS - 1);
+        const playPauseBtn = document.getElementById('play-pause-btn');
+
+        function applyDay(dayIndex) {
+            currentDay = dayIndex;
+            const snapshot = trajectory[dayIndex];
+            const dateStr = history[dayIndex].date;
+            document.getElementById('time-display').textContent = `Day ${dayIndex + 1} / ${TOTAL_DAYS} · ${dateStr}`;
+            document.getElementById('day-label').textContent = `Day ${dayIndex + 1} / ${TOTAL_DAYS}`;
+            scrubber.value = String(dayIndex);
+            flowers.forEach((f) => f.instance.applyGrowth(snapshot.domains[f.id]));
+            updateLegend(snapshot);
+            updateCaption(dayIndex, snapshot);
+        }
+
+        scrubber.addEventListener('input', (e) => {
+            playing = false;
+            playPauseBtn.textContent = '▶';
+            dayAccumulator = 0;
+            applyDay(Number(e.target.value));
+        });
+        playPauseBtn.addEventListener('click', () => {
+            playing = !playing;
+            playPauseBtn.textContent = playing ? '⏸' : '▶';
+        });
+
+        // =====================================================================
+        // Mouse interaction: petal lift + glow on hover, a soft cursor-follow
+        // light, and a subtle camera parallax — all layered on top of the
+        // existing autoplay/orbit, none of it touches growth/timeline logic.
+        // =====================================================================
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let mouseMoved = false;
+        let smoothedMouseX = 0, smoothedMouseY = 0;
+        let cursorLightTargetIntensity = 0;
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            mouseMoved = true;
+        });
+
+        // =====================================================================
+        // Render loop
+        // =====================================================================
+        const clock = new THREE.Clock();
+        const cleanCameraPos = camera.position.clone();
+        applyDay(0);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            // OrbitControls derives its spherical coords from camera.position
+            // itself each call, so it must see the undisturbed orbit position —
+            // reset to it before update(), then re-save the fresh result.
+            camera.position.copy(cleanCameraPos);
+            controls.update();
+            cleanCameraPos.copy(camera.position);
+
+            // Subtle parallax: camera drifts a little toward the cursor,
+            // smoothed so it never feels twitchy — applied only for this
+            // frame's render, never fed back into the orbit state above.
+            smoothedMouseX = THREE.MathUtils.lerp(smoothedMouseX, mouse.x, delta * 2.5);
+            smoothedMouseY = THREE.MathUtils.lerp(smoothedMouseY, mouse.y, delta * 2.5);
+            camera.position.x += smoothedMouseX * 0.5;
+            camera.position.y += smoothedMouseY * 0.3;
+            camera.lookAt(controls.target);
+
+            if (playing) {
+                dayAccumulator += delta;
+                if (dayAccumulator >= DAY_DURATION) {
+                    dayAccumulator -= DAY_DURATION;
+                    applyDay((currentDay + 1) % TOTAL_DAYS);
+                }
+            }
+
+            const soil = trajectory[currentDay].soilMoisture;
+            const soilLightFactor = 0.6 + 0.4 * soil;
+            const lerpRate = 0.03;
+            ambientLight.color.lerp(targetLights.ambient, lerpRate);
+            mainLight.color.lerp(targetLights.main, lerpRate);
+            rimLight.color.lerp(targetLights.rim, lerpRate);
+            mainLight.intensity = THREE.MathUtils.lerp(mainLight.intensity, targetMainInt * soilLightFactor, lerpRate);
+            rimLight.intensity = THREE.MathUtils.lerp(rimLight.intensity, targetRimInt * soilLightFactor, lerpRate);
+
+            if (mouseMoved) {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(allPetals, false);
+                allPetals.forEach((p) => {
+                    p.userData.targetOffset = 0;
+                    p.material.userData.targetGlow = 0;
+                });
+                if (intersects.length > 0) {
+                    intersects[0].object.userData.targetOffset = 0.3;
+                    intersects[0].object.material.userData.targetGlow = 1;
+                    if (intersects[1]) {
+                        intersects[1].object.userData.targetOffset = 0.15;
+                        intersects[1].object.material.userData.targetGlow = 0.5;
+                    }
+                    // Pull the light back off the mesh surface along the view
+                    // ray — a point light at ~0 distance from geometry blows
+                    // out to solid white under physically-correct lighting.
+                    const liftedPoint = intersects[0].point.clone()
+                        .addScaledVector(raycaster.ray.direction, -1.4);
+                    cursorLight.position.lerp(liftedPoint, 0.3);
+                    cursorLightTargetIntensity = 0.12;
+                } else {
+                    cursorLightTargetIntensity = 0;
+                }
+            } else {
+                cursorLightTargetIntensity = 0;
+            }
+            cursorLight.intensity = THREE.MathUtils.lerp(cursorLight.intensity, cursorLightTargetIntensity, delta * 5);
+
+            flowers.forEach((f) => {
+                f.instance.tick(delta, time, f.index);
+                f.instance.group.position.y = -1 + Math.sin(time + f.index * 1.7) * 0.04;
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

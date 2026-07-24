@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DailyRawSignals",
+  "description": "One day's raw input for every domain (flower) in the garden. This is the shape a real data adapter (Apple Health, GitHub, Notion...) or the synthetic generator must produce. The growth engine never reads further upstream than this.",
+  "type": "object",
+  "properties": {
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date this record covers, e.g. 2026-07-24"
+    },
+    "sleep": {
+      "type": "object",
+      "description": "Foundation domain — feeds soilMoisture in addition to having its own flower.",
+      "properties": {
+        "durationHours": { "type": "number", "minimum": 0, "maximum": 14 },
+        "deepSleepPct": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bedTimeMinutes": { "type": "number", "description": "minutes after midnight local time, used externally to compute regularity" },
+        "wakeTimeMinutes": { "type": "number" }
+      },
+      "required": ["durationHours", "deepSleepPct"]
+    },
+    "fitness": {
+      "type": "object",
+      "properties": {
+        "steps": { "type": "integer", "minimum": 0 },
+        "activeMinutes": { "type": "number", "minimum": 0 },
+        "workouts": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["steps", "activeMinutes", "workouts"]
+    },
+    "study": {
+      "type": "object",
+      "properties": {
+        "minutes": { "type": "number", "minimum": 0 },
+        "sessions": { "type": "integer", "minimum": 0, "description": "distinct sittings today — rewards spread over cramming" }
+      },
+      "required": ["minutes", "sessions"]
+    },
+    "career": {
+      "type": "object",
+      "description": "Sparse/event-based rather than a daily magnitude — most days this is empty.",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["commit", "publish", "interview", "offer", "shipped_project"]
+              },
+              "weight": { "type": "number", "minimum": 0, "maximum": 2, "default": 1 }
+            },
+            "required": ["type"]
+          }
+        }
+      },
+      "required": ["events"]
+    }
+  },
+  "required": ["date", "sleep", "fitness", "study", "career"],
+
+  "definitions": {
+    "DomainState": {
+      "description": "What the engine carries day to day per domain. Not part of the input signal — documented here because it's the other half of the schema.",
+      "type": "object",
+      "properties": {
+        "vitality": { "type": "number", "minimum": 0, "maximum": 1, "description": "smoothed current health; drives bloom %" },
+        "momentum": { "type": "number", "description": "vitality(t) - vitality(t-1); direction of travel" },
+        "stage": { "type": "string", "enum": ["seed", "sprout", "leaf", "bud", "bloom", "fruit"] },
+        "stageEnteredOn": { "type": ["string", "null"], "format": "date" },
+        "declineStreak": { "type": "integer", "minimum": 0, "description": "consecutive days of momentum below the wilt threshold" },
+        "wilting": { "type": "boolean", "description": "overlay flag, independent of stage" },
+        "baseline": {
+          "type": "object",
+          "description": "slow-moving personal average per raw metric, used to normalize effort relative to the user's own history rather than an absolute threshold",
+          "additionalProperties": { "type": "number" }
+        }
+      },
+      "required": ["vitality", "momentum", "stage", "declineStreak", "wilting", "baseline"]
+    },
+    "GardenState": {
+      "description": "Map of domain id -> DomainState, plus the derived shared variable.",
+      "type": "object",
+      "properties": {
+        "domains": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/DomainState" }
+        },
+        "soilMoisture": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}
